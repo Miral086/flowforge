@@ -17,33 +17,60 @@ public class Main {
         System.out.println("Starting " + EngineInfo.version());
         WorkflowRunner runner = new WorkflowRunner();
 
-        // 1. Everything succeeds. Shell steps now run real commands and capture their output.
-        Workflow ciPipeline = new Workflow("ci-pipeline", List.of(
+        List<Workflow> workflows = List.of(
+                ciPipeline(),
+                diamondPipeline(),
+                flakyPipeline(),
+                backwardsPipeline(),
+                cyclicPipeline());
+
+        for (Workflow workflow : workflows) {
+            printSummary(runner.run(workflow));
+        }
+    }
+
+    /** Everything succeeds: real shell commands, a 1-second wait, a simulated HTTP check. */
+    private static Workflow ciPipeline() {
+        return new Workflow("ci-pipeline", List.of(
                 new ShellStep("checkout", List.of(), "echo Cloning repository"),
                 new ShellStep("build", List.of("checkout"), "echo Building project"),
                 new DelayStep("wait-for-db", List.of("build"), 1000),
-                new HttpStep("health-check", List.of("wait-for-db"), "http://localhost:8080/health")
-        ));
+                new HttpStep("health-check", List.of("wait-for-db"), "http://localhost:8080/health")));
+    }
 
-        // 2. A step that always fails: retried 3 times with growing waits, then the run fails.
-        Workflow flakyPipeline = new Workflow("flaky-pipeline", List.of(
+    /** Branches and joins: build and lint both depend on checkout; deploy waits for both. */
+    private static Workflow diamondPipeline() {
+        return new Workflow("diamond-pipeline", List.of(
+                new ShellStep("checkout", List.of(), "echo Cloning"),
+                new ShellStep("build", List.of("checkout"), "echo Building"),
+                new ShellStep("lint", List.of("checkout"), "echo Linting"),
+                new ShellStep("test", List.of("build"), "echo Testing"),
+                new ShellStep("deploy", List.of("build", "lint"), "echo Deploying")));
+    }
+
+    /** A step that always fails: 3 attempts with backoff, then the run fails and deploy is skipped. */
+    private static Workflow flakyPipeline() {
+        return new Workflow("flaky-pipeline", List.of(
                 new ShellStep("compile", List.of(), "echo Compiling"),
                 new ShellStep("integration-test", List.of("compile"), "exit 1", 3),
-                new ShellStep("deploy", List.of("integration-test"), "echo Deploying")
-        ));
+                new ShellStep("deploy", List.of("integration-test"), "echo Deploying")));
+    }
 
-        // 3. Steps in the wrong order: fails on the dependency check (fixed properly in A2).
-        Workflow badPipeline = new Workflow("bad-pipeline", List.of(
+    /** Listed in the wrong order: the topological sort runs checkout first anyway. */
+    private static Workflow backwardsPipeline() {
+        return new Workflow("backwards-pipeline", List.of(
+                new ShellStep("test", List.of("build"), "echo Testing"),
                 new ShellStep("build", List.of("checkout"), "echo Building"),
-                new ShellStep("checkout", List.of(), "echo Cloning")
-        ));
+                new ShellStep("checkout", List.of(), "echo Cloning")));
+    }
 
-        printSummary(runner.run(ciPipeline));
-        printSummary(runner.run(flakyPipeline));
-        printSummary(runner.run(badPipeline));
-
-        // Experiment: uncomment, run, read the exception, then comment it out again.
-        // new ShellStep("", List.of(), "echo hi");
+    /** build -> test -> deploy -> build: rejected before any step runs. */
+    private static Workflow cyclicPipeline() {
+        return new Workflow("cyclic-pipeline", List.of(
+                new ShellStep("checkout", List.of(), "echo Cloning"),
+                new ShellStep("build", List.of("test"), "echo Building"),
+                new ShellStep("test", List.of("deploy"), "echo Testing"),
+                new ShellStep("deploy", List.of("build"), "echo Deploying")));
     }
 
     private static void printSummary(WorkflowRun run) {

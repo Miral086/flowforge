@@ -1,10 +1,13 @@
 package com.flowforge.core.engine;
 
+import com.flowforge.core.exception.InvalidWorkflowException;
 import com.flowforge.core.exception.StepExecutionException;
+import com.flowforge.core.graph.DependencyGraph;
 import com.flowforge.core.model.Step;
 import com.flowforge.core.model.Workflow;
 import com.flowforge.core.run.WorkflowRun;
 
+import java.util.List;
 import java.util.Optional;
 
 public class WorkflowRunner {
@@ -13,10 +16,22 @@ public class WorkflowRunner {
 
     public WorkflowRun run(Workflow workflow) {
         WorkflowRun run = new WorkflowRun(workflow);
+
+        List<String> order;
+        try {
+            order = new DependencyGraph(workflow).topologicalOrder();
+        } catch (InvalidWorkflowException e) {
+            run.start();
+            run.fail(e.getMessage());          // marks every step SKIPPED
+            System.out.println("Rejected " + workflow.getName() + ": " + e.getMessage());
+            return run;
+        }
+
         run.start();
         System.out.println("Running workflow: " + workflow.getName());
 
-        for (Step step : workflow.getSteps()) {
+        for (String stepName : order) {
+            Step step = workflow.findStep(stepName);
             Optional<String> pending = findPendingDependency(run, step);
 
             if (pending.isPresent()) {
